@@ -1,0 +1,410 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [9.8.2] - 2026-11-08
+
+### ✨ New Features
+
+- ✨ Added **mobile player gestures** (`usePlayerGestures.ts`, wired into `SimPlayer`) — a single-finger touch on the video surface is interpreted by region and direction: vertical drag on the **left half** adjusts brightness (the browser cannot touch system brightness, so a CSS `filter: brightness()` is applied, clamped 0.2–1.5), vertical drag on the **right half** adjusts `video.volume` (0–1, also toggles `muted` at zero), and a **horizontal** drag seeks from the playback position at gesture start (full container width maps to the whole duration). Movement past a 10 px threshold is required so a plain tap is not treated as a gesture; `touchmove` is cancelled with `preventDefault` to stop page scrolling, and once a gesture is decided the synthesized `click` is intercepted at the container capture phase so it never toggles play/pause/fullscreen. A centered glass overlay shows the target time (with `base → target`) or the volume/brightness percentage while dragging
+- ✨ Added **next-episode preloading** (`usePreloadNext.ts`) — while an episode plays, a `rel=preconnect` link is injected for the next episode's origin (early DNS/TLS) and a hidden 1px, muted `<video preload="metadata">` is created for its URL so the manifest/headers are fetched without downloading the whole segment or autoplaying. For HLS streams the hidden video only loads the playlist; the actual segments are still pulled by hls.js after the switch. A new `preloadNext` player setting (default `true`) gates it, the last episode passes `undefined` (nothing is preloaded), and every element/link is torn down on cleanup
+- ✨ Added **watch statistics** — a new `WatchStats` model (`totalSeconds`, distinct `videoCount`, `playCount`, per-day and per-video seconds) is persisted under `bismuth_watch_stats`. `SimPlayer` gains an `onWatchTick` prop fired from its existing 3-second save timer only while actually playing (so seeks cannot inflate the count); `PlayerPage` feeds it through `addWatchSeconds` and calls `recordPlay` on entry and episode switch (deduped via a `seenVodIds` set). A new `StatsPage` reachable from the settings home shows total/today duration, video and play counts, a per-video ranking and a reset action, and everything stays on-device
+- ✨ Added a **"watch stats" entry** to the settings home (now seven entries) and a **preload toggle** to the player settings page
+
+### 🔧 Changed
+
+- 🔧 **Zero/empty ratings are now hidden** — `VideoCard` and `DetailPage` gate the rating row on `Number(vod_score) > 0` instead of the truthy `vod_score`, so Apple-CMS sources that return the string `"0"` / `"0.0"` (a non-empty, truthy string) no longer render a star row showing a score of zero
+- 🔧 Refactored the storage subscription layer (`store.ts`) — each `createStorageStore` instance now owns its own listener set and snapshot cache instead of sharing one global map, and exposes a `notify()` that refreshes only that store. High-frequency `addWatchSeconds` writes therefore update just the stats store without re-rendering unrelated subscribers, while `notifyStorageChange` and the cross-tab `storage` event still fan out to every store
+- 🔧 Replaced the remaining hardcoded indigo gradient on the current-episode button in `PlayerPage` with the shared `bi-accent-gradient`
+
+## [9.8.1] - 2026-11-07
+
+### ✨ New Features
+
+- ✨ Added an **update dialog** to the About page — when a newer release is found, a Radix dialog opens showing the new version, publish date, the release body and, for every uploaded asset, a **copy-link** button (with a short "已复制" confirmation). Falls back to copying the release page URL when a release carries no assets. The check itself is still manual, unchanged
+- ✨ Added a **zero-dependency Markdown renderer** (`Markdown.tsx`) for release notes — supports headings, unordered lists, bold, inline code and links, renders straight to React elements (raw HTML is never parsed) and only allows `http(s)` link targets, so it cannot be used for XSS. Chosen over `react-markdown` (34 KB gzip + 11 transitive deps) and `marked` (14.6 KB but HTML-string output) because it runs in a single dialog
+- ✨ Added a **storage subscription layer** (`store.ts`) — `createStorageStore` wraps `useSyncExternalStore` with a listener registry, a snapshot cache (stable references for `getSnapshot`) and a manual `notifyStorageChange` for same-tab `setItem` calls, which never fire a `storage` event; cross-tab sync still comes from the native `storage` listener. `storage.ts` now exposes `usePlayerSettings` / `useCacheSettings` / `useCorsProxyList` / `useCorsProxyEnabled` / `usePlayHistory` / `useFavorites`, and every settings page subscribes instead of reading once on mount
+- ✨ Added `usePlaySources` — a hook owning `sources` / `activeSourceIndex` / `episodes` plus `initSources` (with out-of-range clamping) and `changeSource`; `DetailPage` and `PlayerPage` both use it, and `PlayerPage` wraps `changeSource` to reset the episode, clear auto-next and show a hint
+- ✨ Added **list virtualization** (`VirtualGrid.tsx`, powered by `@tanstack/react-virtual`) — rows are virtualized with `measureElement` for exact row heights and `overscroll` anchoring; column count and gaps follow the same Tailwind breakpoints as the old grid (3→10 columns, 12→20 px gaps), and the scroll container is owned by the caller. `HomePage`'s grid now mounts only the visible rows
+- ✨ Added **proxy bypass for local/intranet URLs** (`net.ts` → `isLocalOrPrivateUrl`) — `localhost`, `127.x`, `[::1]`, `*.local` and the `10.` / `192.168.` / `172.16–31.` / `169.254.` ranges skip the CORS proxy in both `buildUrl` and `fetchWithRetry`. Malformed URLs return `false` (proxy keeps applying) rather than being assumed local
+- ✨ Added a **configurable history limit** — `getHistoryLimit` / `setHistoryLimit` backed by an independent key (default 50); `addPlayHistory` trims to that limit, and the History page gained a gear button with a 20 / 50 / 100 / 200 picker
+- ✨ Added **storage schema versioning** (`migrate.ts`) — `bismuth_schema_version` plus a table of adjacent-version migration functions (currently empty, with a documented example); unversioned legacy data is treated as version 0. `runStorageMigrations` runs in `main.tsx` before React renders, and one failing migration never blocks the version write
+- ✨ Added **Vitest** with `npm test` / `npm run test:watch` — 22 unit tests over pure helpers (source parsing, URL/proxy rules), running in the `node` environment with no extra config
+
+### 🔧 Changed
+
+- 🔧 **`SimPlayer` is now a proper Bismuth citizen** — new optional props `autoResume`, `initialProgress`, `onProgress` and `onClearProgress`; the component no longer imports `getPlayerSettings` and no longer owns the `bismuth_progress_*` keys. Progress is reported upward and seeded back in, so the built-in player and the rest of the app share one history record instead of maintaining a parallel one. Backward compatible: every new prop has a default
+- 🔧 Player settings changed at runtime now apply immediately — the built-in player reads `autoResume` / `initialProgress` through props instead of a one-time module read (P1#9)
+- 🔧 Version metadata in the UI is read from a single `__APP_VERSION__` define instead of three hardcoded fallbacks
+
+### 🧹 Cleanup
+
+- 🧹 User-facing `alert()` calls replaced with the existing toast system (5 call sites)
+- 🧹 Removed ~185 lines of dead CSS and dead code across 18 files; `App.css` went from 535 to 368 lines
+- 🧹 ESLint went from 33 problems (30 errors) to **0** — `SimPlayer` keeps an scoped override for code that was intentionally left untouched, and `VirtualGrid` carries a targeted disable for `react-hooks/incompatible-library` (`useVirtualizer` returns a function that cannot be memoized safely, so React Compiler skips that component)
+- 🧹 Production builds now strip `console.log` / `console.debug` while keeping `console.error` / `console.warn` for on-device diagnostics
+- 🧹 Updated Browserslist targets; raised `chunkSizeWarningLimit` to 600 so the intentional 522 KB on-demand hls chunk no longer warns while oversized chunks still do
+
+### 📦 Maintenance
+
+- 📦 Version metadata bumped to 9.8.1 across `package.json`, `package-lock.json`, the in-app version display and the README version badges
+- 📦 `vite.config.ts` accepts a `BISMUTH_VERSION` environment override for local test builds; it defaults to `package.json`
+
+## [9.8.0] - 2026-11-01
+
+### ✨ New Features
+
+- ✨ Added **multi-line playback** (multi-source episodes) — `parsePlaySources` now parses every `$$$`-separated play source instead of silently dropping the backup lines; both the detail page and the player show a "线路" switcher to pick any source line, and the selected line carries through to the player
+- ✨ Replaced the hardcoded ethics regex with **customizable blocking keywords** — manage a keyword list (add / remove) with two match modes per keyword: **fuzzy** (name contains the word) and **exact** (word matched as a regex); applied to both category filtering and list filtering
+- ✨ Cache now uses an **LRU eviction strategy** — each entry tracks its last-access time (refreshed on hit, throttled to avoid excessive writes) and the cache enforces a size cap (150 items / ~3 MB) by evicting the least-recently-used entries; the storage-full fallback is LRU too
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed `parsePlayUrls` only using the first `$$$` play source, silently dropping backup lines (P0#3)
+- 🐛 Fixed pagination count corruption after filtering — `data.total` is no longer overwritten with the filtered page length, so page counts stay correct (blocking only filters the current page)
+- 🐛 Fixed ethics filtering leaking when a category was renamed — the fixed regex is replaced by the user-configurable keyword list
+
+### 🔧 Maintenance
+
+- 🔧 Version metadata bumped to 9.8.0 across `package.json`, `package-lock.json`, in-app about/settings fallbacks and the README version badges
+
+## [9.7.3] - 2026-10-25
+
+### ✨ New Features
+
+- ✨ Added **auto-play next episode** — a new toggle in Player Settings (default off); when the current episode finishes the player counts down 3 seconds and automatically switches to the next one (the last episode never auto-plays), with an episode-switch toast shown on every switch
+- ✨ Added **container-level fullscreen** for the built-in player — the fullscreen button / double-tap / F-key now fullscreens the outer player container instead of the internal one, keeping the toasts visible and **not exiting fullscreen when the player remounts on episode switch**; implemented via a new optional `externalFullscreenRef` prop on `SimPlayer` (backward compatible, behavior unchanged when omitted), which also removed the duplicate top-right fullscreen button
+- ✨ Homepage: added **pull-to-refresh** (native touch gesture with `overscroll-contain`) that forces a cache-bypass reload, plus a **skeleton card stream** (12 first-screen cards + 4 on load-more) and card press feedback (`active:scale`)
+
+### 🧹 Refinements
+
+- 🧹 Detail page: long synopses now fold with an expand/collapse toggle instead of overflowing
+- 🧹 Toast bubbles (episode hint / auto-next countdown) gained subtle enter/exit animations
+
+### 🔧 Maintenance
+
+- 🔧 Version metadata bumped to 9.7.3 across `package.json`, `package-lock.json`, in-app about/settings fallbacks and the README version badges
+
+## [9.7.1] - 2026-10-04
+
+### ✨ New Features
+
+- ✨ Added video source **import & export** — export the full source list as a Bismuth JSON file (`bismuth-sources-*.json`) with one tap; import back later or share with other devices/players
+- ✨ Added third-party source file import supporting files that carry `https://` video source links — Bismuth export files, generic JSON arrays with field aliases (`url`/`api`/`siteUrl`/…, `name`/`title`/`label`/…), string-URL arrays, JSON Lines and plain-text link lists (`URL per line`, `name,url`, `name|url` mixed lines with comments ignored)
+- ✨ Added **remote URL import** — paste an `https://` link pointing to a source config and the app fetches & parses it through the unified CORS-proxy channel (with retry / proxy rotation)
+- ✨ Added an import preview dialog — detected format badge, parsed source list with duplicate highlighting (same ID or same normalized URL), ignored-entry count, and two import modes: **merge** (skip duplicates, keep existing) or **replace all**
+- ✨ Added smart ID handling — IDs are preserved when possible, otherwise deterministically generated from the host name + URL hash and guaranteed collision-free against existing sources
+- ✨ Import UI supports both file picker and drag-and-drop (`.json` / `.txt`, 5 MB limit), with toast feedback for every outcome
+
+### 🔧 Maintenance
+
+- 🔧 Hardened source URL query building — API requests now use `URLSearchParams` (same-name params overwritten) instead of naive `?`-concatenation, so imported sources that already carry a query string (e.g. `?token=xxx`) no longer produce broken double-`?` URLs; app-managed params (`ac`/`pg`/`wd`/`ids`/`limit`/`t`) are stripped from imported URLs while third-party params like tokens are preserved
+- 🔧 `getCategories()` now strips managed params from the source URL so category data (`class`) loads correctly for imported sources
+- 🐛 Fixed config files whose entries are all of an incompatible kind (requiring an external crawler engine that the app does not bundle) wrongly falling back to plain-text link parsing — such files now report 0 importable sources with a clear format hint instead of polluting the import list with unrelated URLs (live-stream / EPG / drive links) scraped from the JSON text
+- 🔧 Version metadata bumped to 9.7.1 across `package.json`, `package-lock.json`, in-app about/settings fallbacks and the README version badges
+
+## [9.7.0] - 2026-09-19
+
+### ✨ New Features
+
+- ✨ Added a full theme plugin system with a new **Settings → 外观 (Appearance)** page
+- ✨ Added a theme gallery with 5 built-in themes — 暗夜 (default dark), 纯白 (true light theme via inverted gray scale), 护眼豆沙 (eye-care beige), 琥珀复古 (amber retro) and 霓虹都市 (neon city); one-tap switching with persistence across reloads
+- ✨ Added the Theme Workshop — a 6-color palette editor (backgrounds / accent / accent-soft) with live preview and "另存为主题" (save as custom theme), plus font, radius and density controls
+- ✨ Added wallpaper support — URL or local upload with adjustable blur and mask (overlay opacity) sliders
+- ✨ Added branding customization — configurable app name and logo
+- ✨ Added a custom CSS editor and remote CSS skins by URL with two modes: **override** (default, layered on top of built-in styles) and **replace** (expert mode, full replacement with automatic fallback chain replace → override → built-in if the skin is incomplete, never a blank screen); remote assets require a one-time trust confirmation and are sanitized (`@import` / `url()` stripped)
+- ✨ Added three-way import/export — theme file (.json), base64 theme code (`BI2` prefix) and URL import; packs are validated against a strict field whitelist
+- ✨ Added IndexedDB asset storage (`bismuth` database: wallpapers / logos / remote CSS) so large resources load instantly on repeat visits; small settings stay in localStorage, with an in-memory fallback when IndexedDB is unavailable
+- ✨ Added safety hatches — `?safe=1` URL flag skips all theme rendering, and "重置外观" (reset appearance) is always one tap away
+- ✨ Added a themeable brand LOGO — gradient colors exposed as `--bi-logo-from/via/to` with per-theme palettes (纯白 gets a black & white LOGO), the icon foreground decoupled via `--bi-logo-icon`; custom logo image and app name are now wired into the top bar, splash and welcome screens
+- ✨ Added a unified glassmorphism system — four reusable glass styles (`bi-glass-overlay` / `bi-glass-panel` / `bi-glass-pop` / `bi-glass-bar`) with border & highlight auto-derived from panel brightness, applied across 10 surfaces (dialogs, speed & context menus, resume prompt, toasts, mobile bottom nav, desktop sidebar) so wallpapers shine through the glass
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed workshop drafts silently vanishing when a large uploaded wallpaper exceeded the 5 MB localStorage quota — draft assets (wallpaper / logo data URLs) now spill into IndexedDB and only a slim reference stays in localStorage
+- 🐛 Fixed the wallpaper disappearing after switching themes — the wallpaper is now an independent global setting (user wallpaper takes priority over the theme-pack wallpaper) that survives theme switches
+- 🐛 Fixed leftover CSS variables when switching back to a theme without explicit values — the 暗夜 LOGO gradient and custom font now restore correctly (unset variables are removed instead of skipped)
+
+### 🔧 Maintenance
+
+- 🔧 Theming groundwork — Tailwind palette remapped to `--bi-*` CSS variables and ~75 hardcoded background colors replaced, pixel-identical under the default theme
+- 🔧 Version metadata bumped to 9.7.0 across `package.json`, `package-lock.json`, in-app about fallback and the README version badge
+
+## [9.6.1] - 2026-09-19
+
+### ✨ New Features
+
+- ✨ Added back navigation to the Favorites page — a mobile back arrow and a desktop "返回首页" button, consistent with the History page
+- ✨ Added resume progress on favorites — favorite cards now show "上次看到: <episode>" read from the play history (matched by `vod_id + sourceId`), and the play button becomes "继续" to resume the last watched episode
+- ✨ Added favorite resume state fallback — entries without history start from episode 1 as before
+
+### 🧹 Refinements
+
+- 🧹 Replaced the emoji label on the "屏蔽伦理片" setting with a shield icon for a consistent look
+- 🧹 Removed emoji markers from source comments; refreshed the Favorites empty-state copy
+
+### 🔧 Maintenance
+
+- 🔧 Version metadata bumped to 9.6.1 across `package.json`, `package-lock.json`, in-app about/settings fallbacks, and the README version badge; the README download link now points to the v9.6.0 Android APK
+
+## [9.6.0] - 2026-09-13
+
+### ✨ New Features
+
+- ✨ Added standalone Filter page — the homepage no longer shows category tabs and loads the full video list by default; a "筛选" button next to the search box opens a dedicated filter page with top-level / sub-category rows, an infinite-scroll grid, and filter state preserved across navigation
+- ✨ Added source annotation for history & favorites — every card now shows which video source the item came from; entries keep their original annotation even after the user switches sources
+- ✨ Added cross-source playback — opening an item from history/favorites fetches details and plays from the annotated source instead of the currently selected one, without switching the global source (legacy entries without a recorded source fall back to the current source)
+- ✨ Added deleted-source fallback — when the annotated source no longer exists, detail/player pages show a dedicated error notice ("没了 o(TヘTo) / 对应影视源被删除 / 影视源信息-ID/名称"); orphaned entries are kept for a 30-minute grace window (marked "源已删除·即将清理") before being purged, and re-adding a source with the same ID restores them
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed cross-source handoff losing the annotated source — DetailPage passed the raw API detail object (without `sourceId`) to the player, so the player silently fell back to the current source; the annotated source now travels with the video item through the detail → player handoff
+- 🐛 Fixed stale pending-cleanup markers — re-adding a deleted source left entries marked "源已删除" forever, and a stale timestamp would skip the 30-minute grace window on a second deletion; markers are now cleared as soon as the source is alive again
+- 🐛 Fixed history/favorites identity key — entries were keyed by `vod_id` alone, so different sources sharing a numeric ID overwrote each other's records, mislit the favorite star, and let deletion remove another source's entry; identity is now `vod_id + sourceId`
+
+### 🖥️ Desktop & Branding
+
+- 🖥️ Desktop-shell adaptation (Bismuth Desktop) — when running inside the desktop shell the app auto-detects the built-in local CORS proxy via `/__desktop_info`, routes every source API call and video stream through it, and the CORS settings page shows a "已内置本地代理，免配置" banner — zero manual proxy setup
+- 🏷️ Unified product name **Bismuth** — the page `<title>` and the desktop window title now read "Bismuth"
+- 🔧 Completed project metadata — `package.json` now declares description / author / license / homepage / repository, and the desktop build embeds a full Windows version resource (product name, author, copyright)
+
+## [9.5.1] - 2026-09-07
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed favicon 404 — `index.html` referenced `/vite.svg` (a Vite template leftover that does not exist in `public/`); now points to the real app icons (`icon-192x192.svg` + `apple-touch-icon`)
+- 🐛 Fixed incorrect Node.js requirement — README claimed Node >= 18, but Vite 7 requires >= 20.19; corrected both READMEs and added an `engines` field to `package.json`
+
+### ⚡ Performance
+
+- ⚡ Added `manualChunks` code-splitting in `vite.config.ts` — the single 902 KB bundle is now split into `hls` (hls.js), `react` (runtime), and `vendor` chunks; hls.js is additionally loaded on demand via dynamic import, cutting first-payload JS from ~277 KB to ~114 KB gzip (-59%)
+
+### 📦 CI/CD
+
+- 🔧 Added GitHub Actions workflow (`.github/workflows/deploy-pages.yml`) — builds on every push to `main` and auto-publishes to GitHub Pages (also supports manual `workflow_dispatch`)
+- ☁️ Added Cloudflare Pages one-click deploy support — `wrangler.toml` (project recognition for the "Deploy to Cloudflare" button), `public/_redirects` (SPA fallback), and `public/_headers` (security headers + immutable caching for hashed assets); all three deploy buttons (Vercel / Netlify / Cloudflare) now work out of the box
+
+## [9.5.0] - 2026-09-06
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed episode list not scrollable on player page — the right-side panel had no height constraint on mobile, causing `overflow-y-auto` to never activate; added `flex-1 max-h-[45vh]` on mobile so episode grid scrolls independently when there are many episodes
+- 🐛 Fixed resume playback bug — `PlayerPage` useEffect was missing `initialEpisode` in dependency array, causing episode to not update when navigating from history with a specific episode
+
+### ✨ New Features
+
+- ✨ Added 🔞 Ethics content filter — "屏蔽伦理片" toggle in **Video Source Settings**; when enabled, ethics categories are hidden from homepage navigation and ethics videos are filtered from all lists (matches category names containing 伦理/情色/成人/色情/18禁/三级 etc.)
+- ✨ Added Favorites system — ❤️ button on video detail page to add/remove favorites; "收藏" tab in bottom navigation and desktop sidebar with full favorites management (view, play, remove individual, clear all)
+- ✨ Favorites persist across sessions via localStorage (`bismuth_favorites` key)
+
+### 📱 UI/UX
+
+- 📱 **Navigation redesign** — History moved from bottom tab to homepage top-right icon button; bottom nav now 4 items (Home / Search / Favorites / Settings); desktop sidebar synced
+- 📱 **Ethics filter relocated** — moved from Player Settings to Video Source Settings for better content-source association
+- 📱 Favorite indicator (❤️ badge) on video cards in favorites list
+- 📱 Global scrollbar styling — unified 6px thin scrollbar across all scrollable areas with hover highlight
+- 📱 Current episode pulse animation — selected episode button in player page has a breathing purple glow effect
+- 📱 Homepage top-right button changed from Settings to History (settings accessible via bottom nav)
+
+### 🧹 Cleanup
+
+- 🧹 Removed duplicate `Category` interface definition in `src/types/index.ts` — the legacy `{ id, name }` definition at line 92 was dead code (TypeScript interface merging combined it with the active `{ type_id, type_pid, type_name }` definition); only the Apple CMS class-field definition is retained
+
+---
+
+## [9.4.0] - 2026-09-06
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed build failure — removed 49 unused shadcn/ui zombie components (only button/input/dialog/switch are actually referenced) and restored the missing `index.html` Vite entry file that was absent from the repository
+- 🐛 Fixed categories always falling back to hardcoded list — `getCategories()` requested `?ac=videolist`, but Apple CMS omits the `class` field when that parameter is present; now requests the base URL directly so categories are dynamically loaded from the API (43 categories on iqiyizyapi, 48 on jyzyapi)
+- 🐛 Fixed inconsistent localStorage key naming — `video_sources` and `current_source_id` were the only keys without the `bismuth_` prefix; renamed to `bismuth_video_sources` / `bismuth_current_source_id` with automatic one-time migration of legacy data
+- 🐛 Fixed pagination field type inconsistency — Apple CMS returns `page`/`pagecount`/`total` as numbers without parameters but as strings with `pg`/`limit`; `safeApiResponse()` now normalizes all pagination fields with `Number()` to prevent string-comparison bugs like `"10" < "9" === true`
+- 🐛 Fixed sub-category "All" tab showing empty results — Apple CMS top-level categories (e.g. "连续剧" type_id=8) contain no direct videos (all videos live under sub-categories), so requesting `t=8` returns `total: 0`; clicking a top-level category now auto-selects its first sub-category, and the non-functional "All" sub-category button has been removed
+
+### ✨ Improvements
+
+- ✨ Added two-level category navigation — leverages the `type_pid` hierarchy from Apple CMS `class` field: top-level categories as tabs (first row), sub-categories as chips (second row), replacing the previous flat horizontal scroll of 40+ categories
+- ✨ Added `Category` type to `ApiResponse` — the `class` field is now properly typed and passed through `safeApiResponse()`
+
+### 🧹 Cleanup
+
+- 🧹 Removed 49 unused shadcn/ui component files from `src/components/ui/` (accordion, alert, avatar, badge, calendar, card, carousel, chart, checkbox, collapsible, command, context-menu, drawer, dropdown-menu, field, form, hover-card, input-group, input-otp, item, kbd, label, menubar, navigation-menu, pagination, popover, progress, radio-group, resizable, scroll-area, select, separator, sheet, sidebar, skeleton, slider, sonner, spinner, table, tabs, textarea, toggle, toggle-group, tooltip, button-group, alert-dialog, empty, aspect-ratio, breadcrumb)
+
+---
+
+## [9.3.0] - 2026-05-10
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed HomePage not refreshing after adding the first video source — the mount-only `useEffect` never re-checked `localStorage`, so the empty welcome screen persisted until page reload
+- 🐛 Fixed HomePage categories not updating after switching video source — same root cause: categories were loaded once on mount and never refreshed
+- 🐛 Fixed SimPlayer `crossOrigin` conflict on iOS — the init `useEffect` unconditionally set `video.crossOrigin = 'anonymous'`, overriding the JSX `crossOrigin={isIOS ? undefined : 'anonymous'}` intent to skip CORS on iOS native HLS, potentially causing playback failures on CDN resources without `Access-Control-Allow-Origin`
+- 🐛 Fixed API response not validated — raw `response.json()` was cast directly to `ApiResponse`, so malformed or error responses without a `list` field caused `TypeError` crashes at all consumption sites (video list spread, detail access, etc.)
+- 🐛 Fixed `components.json` pointing to wrong Tailwind config file — `postcss.config.js` instead of `tailwind.config.js`, breaking `npx shadcn add` CLI commands
+
+### 🔧 Changes
+
+- 🔧 Updated version fallback from `9.2.0` to `9.3.0` in Settings and About pages
+
+---
+
+## [9.2.1] - 2026-05-10
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed VideoCard still referencing the removed `imageError` variable after the v9.2.0 cleanup — caused runtime crash when `imageError` was referenced in the render path
+- 🐛 Fixed images continuing to load in the background after leaving the home page — replaced native `loading="lazy"` with `IntersectionObserver` so that observers can be properly disconnected on unmount
+- 🐛 Fixed `img.src` being cleared on component unmount triggering "Image corrupt or truncated" console error — cleanup logic now removes event listeners before clearing `src` to prevent aborted-download error events
+- 🐛 Fixed `HomePage` `hasMore` pagination referencing undefined variable `limit` — caused `ReferenceError` crash on API sources that do not return `page`/`pagecount` metadata, leading to infinite re-fetch loop
+
+### 🧹 Cleanup
+
+- 🧹 Removed unused `CACHE_TTL.search` from `api.ts` — search requests bypass cache entirely, making this configuration dead code
+
+---
+
+## [9.2.0] - 2026-05-09
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed `parsePlayUrls` not handling multi-source `$$$` separator — only the first source's episodes were parsed, causing missing episodes on sources with multiple playlists
+- 🐛 Fixed iOS Safari HLS event listener memory leak — `stalled` and `error` handlers accumulated on every `src` change, never cleaned up on unmount
+- 🐛 Fixed iOS HLS error handler race condition — CORS retry handler and iOS native error handler both fired on the same error event, causing double-reload and potential playback failure
+- 🐛 Fixed `DetailPage` skeleton screen not showing when switching videos — `coverLoaded` state was never reset
+- 🐛 Fixed `PlayerPage` episode not syncing with `initialEpisode` prop — navigating to play from history always started at episode 0
+- 🐛 Fixed `fetchWithRetry` throwing generic "请求失败" for non-OK responses — now reports the actual HTTP status code and consumes response body to prevent connection pool exhaustion
+- 🐛 Fixed version number fallback hardcoded as `8.0.0` in About and Settings pages
+
+### ✨ Improvements
+
+- ✨ Added volume slider to SimPlayer — hover over the volume icon to reveal a draggable volume control (previously volume could only be adjusted via keyboard)
+- ✨ Improved pagination accuracy — `hasMore` now uses API `page/pagecount` metadata when available, falling back to list length check (prevents premature scroll stop on sources with custom page sizes)
+- 🧹 Removed unused `_viewKey` state from `App.tsx` — was written 7+ times per navigation but never read, causing unnecessary full-tree re-renders
+- 🧹 Removed unused `imageError` state from `VideoCard` — original image URL is now preserved for retry after transient network failures (note: one stale reference was missed and fixed in a subsequent commit)
+- ⚡ Optimized `PlayerPage` — `getPlayerSettings()` no longer reads localStorage on every render, cached in state instead
+- ⚡ Optimized `SimPlayer.handleScreenshot` — no longer recreates ~4 times per second due to `currentTime` dependency, reads directly from video element
+- 🔧 Added `loadVideos` to useEffect dependency array in `HomePage` (exhaustive-deps compliance)
+- 🔧 Cleaned up `resumePromptTimerRef` on unmount to prevent unintended progress deletion
+- 🔧 Clamped negative time differences in `HistoryPage.formatTime` for robustness
+
+### 🏗️ Repository
+
+- 📁 Added `.gitignore` — build artifacts (`dist/`, `Demo/`, `assets/`, root `index.html`, `icon-*.png/svg`) are now excluded from version control
+- 🧹 Removed legacy build artifacts from repository tracking (`Demo/`, `assets/`, root `index.html`, `icon-*.png`, `icon-*.svg`)
+
+---
+
+## [9.1.0] - 2026-04-16
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed settings page crash — `ArrowLeft` icon missing from import caused "ArrowLeft is not defined" runtime error
+- 🐛 Fixed critical CORS proxy double-wrapping bug — `buildUrl()` was called both in callers and inside `fetchWithRetry()`, causing proxy URLs to be nested inside themselves and all API requests to fail when CORS proxy was enabled
+- 🐛 Fixed Toast notifications invisible — `SimPlayer` dispatched toast messages but no `<Toaster>` renderer existed in the app; created a lightweight Toaster component using the existing `use-toast` hook
+- 🐛 Fixed auto-resume setting not working — the "Auto Resume" toggle saved its value but `SimPlayer` never read it, always showing the resume prompt regardless
+- 🧹 Removed dead `carousel.tsx` import dependencies (embla-carousel) that were never used by any page component
+
+---
+
+## [9.0.0] - 2026-04-16
+
+> **Note:** No separate Git tag was created for v9.0.0. The changes below are included within the v9.1 tag range (`v8.2..v9.1`).
+
+### ✨ New Features
+
+- 🏗️ **Settings page redesigned** — each setting category (Video Sources, Player, CORS Proxy, Cache, About) now has its own dedicated page with full-screen navigation
+- ✨ Added proxy priority reordering — drag proxies up/down with arrow buttons to adjust priority order
+- ✨ Enhanced cache settings page — now displays detailed cache policy breakdown (TTL for each request type)
+- ✨ Settings home page now shows live summaries (active proxy count, cache item count, version info)
+- 🎨 Consistent page header design across all settings sub-pages with color-coded icons
+- 🎨 Added explanatory help text on every settings page for better user guidance
+
+### 🔧 Changes
+
+- 🔧 Unified storage key naming convention (`bismuth_` prefix across all keys)
+- 🔧 Improved API layer — `fetchWithRetry` now uses proper URL variable tracking instead of fragile string reverse-parsing
+
+---
+
+## [8.3.0] - 2026-04-16
+
+> **Note:** No separate Git tag was created for v8.3.0. The changes below are included within the v9.1 tag range (`v8.2..v9.1`). The original CHANGELOG entry listed the date as 2026-04-15, but no commits exist on that date — the actual changes were committed on 2026-04-16 alongside the v9.0/v9.1 release batch.
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed iOS Safari HLS playback stuttering — switched from bare `video.src` to optimized native HLS with `preload="auto"`, removed unnecessary `crossOrigin="anonymous"` on iOS, added error recovery and buffer stall recovery logic
+- 🐛 Fixed CORS preflight overhead on iOS causing slow buffering
+
+---
+
+## [8.2.0] - 2026-04-14
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed fullscreen button not responding on iOS Safari (added `webkitEnterFullscreen` fallback)
+- 🐛 Fixed fullscreen state detection on Safari (added `webkitfullscreenchange` event listener)
+
+### ✨ Improvements
+
+- ✨ Fullscreen now uses webkit-prefixed APIs as fallback for Safari/iOS compatibility
+
+---
+
+## [8.1.0] - 2026-04-10
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed progress bar not responding to clicks and drags (hot zone z-index conflict blocked pointer events)
+
+### ✨ New Features
+
+- ✨ Version number now dynamically read from `package.json` instead of being hardcoded
+- ✨ Added "Check for Updates" feature in Settings → About, using GitHub Releases API
+
+---
+
+## [8.0.0] - 2026-04-09
+
+### ✨ New Features
+
+- ✨ Integrated SimPlayer as built-in player (supports MP4/WebM/HLS)
+- ✨ Built-in player features: screenshot, picture-in-picture, playback speed, progress memory, keyboard shortcuts
+- ✨ Auto-hide player controls — move mouse to reveal, idle to hide (YouTube-style)
+- ✨ CORS proxy toggle — optionally disable CORS proxy for direct API requests
+- ✨ "Continue" button in history jumps directly to the player page
+
+### 💄 Design
+
+- 💄 Desktop player and episode list in left-right layout, episode panel scrollable
+- 💄 Responsive player control bar with compact buttons for mobile
+- 💄 Transparent progress bar hover zone
+
+### 🐛 Bug Fixes
+
+- 🐛 Fixed invisible player on mobile in all modes
+- 🐛 Fixed PiP button not showing on some environments (multi-detection fallback)
+
+---
+
+## [7.0.0] - 2026-02-27
+
+### ✨ New Features
+
+- ✨ Added splash screen animation
+- ✨ Added page transition animations
+- ✨ Added image loading animations
+- ✨ Added elegant SVG placeholder images
+- ✨ Added skeleton screen loading effects
+
+### 🐛 Bug Fixes
+
+- 🐛 Removed PWA functionality for simplified deployment
+
+### 💄 Design
+
+- 💄 Optimized loading state display
+- 💄 Optimized desktop sidebar

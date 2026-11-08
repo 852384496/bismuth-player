@@ -1,0 +1,136 @@
+// 影视源类型
+export interface VideoSource {
+  id: string;
+  name: string;
+  url: string;
+}
+
+// 影视项目类型
+export interface VideoItem {
+  vod_id: number;
+  vod_name: string;
+  vod_pic: string;
+  vod_remarks?: string;
+  vod_score?: string;
+  type_name?: string;
+  vod_year?: string;
+  vod_area?: string;
+  vod_actor?: string;
+  vod_director?: string;
+  vod_content?: string;
+  vod_play_url?: string;
+  vod_play_from?: string;
+  /** 来源影视源 ID（历史/收藏跨源播放用） */
+  sourceId?: string;
+  /** 来源影视源名称（展示标注用） */
+  sourceName?: string;
+}
+
+// 分类类型（苹果CMS class 字段）
+export interface Category {
+  type_id: number;
+  type_pid: number;
+  type_name: string;
+}
+
+// API响应类型
+export interface ApiResponse {
+  code: number;
+  msg: string;
+  page?: number;
+  pagecount?: number;
+  limit?: number;
+  total?: number;
+  list: VideoItem[];
+  class?: Category[];
+}
+
+// 播放历史类型
+export interface PlayHistory {
+  vod_id: number;
+  vod_name: string;
+  vod_pic: string;
+  episode: number;
+  episodeName: string;
+  progress: number;
+  timestamp: number;
+  sourceId: string;
+  /** 来源影视源名称（展示标注用） */
+  sourceName?: string;
+  /** 对应源被删除后的待清理标记（时间戳，超 30 分钟物理删除） */
+  pendingDeleteAt?: number;
+}
+
+// 播放器模式
+export type PlayerMode = 'builtin' | 'external';
+
+// 播放器设置
+export interface PlayerSettings {
+  playerMode: PlayerMode;
+  playerUrl: string;
+  autoResume: boolean;
+  autoNext: boolean;
+  /** 是否预加载下一集（preconnect + metadata 预取，默认开启） */
+  preloadNext: boolean;
+  blockEthics: boolean;
+  /** 屏蔽关键词表：fuzzy=包含即匹配；exact=正则完全匹配 */
+  blockKeywords: BlockKeyword[];
+}
+
+// 屏蔽关键词：mode 决定匹配方式
+export type BlockMatchMode = 'fuzzy' | 'exact';
+export interface BlockKeyword {
+  word: string;
+  mode: BlockMatchMode;
+}
+
+// 播放线路（多线路源：同一影片的多个播放源，以 $$$ 分隔）
+export interface PlaySource {
+  name: string;
+  episodes: { name: string; url: string }[];
+}
+
+// 缓存设置
+export interface CacheSettings {
+  enabled: boolean;
+}
+
+// 观看统计（本地累计，不上传）
+export interface WatchStats {
+  /** 累计观看秒数 */
+  totalSeconds: number;
+  /** 看过的不同视频数 */
+  videoCount: number;
+  /** 播放动作次数（每次进入/切集播放） */
+  playCount: number;
+  /** 按日期（YYYY-MM-DD）的观看秒数 */
+  daily: Record<string, number>;
+  /** 按视频的观看秒数 */
+  perVideo: Record<string, { name: string; seconds: number }>;
+  /** 已计入 videoCount 的视频 ID（去重用） */
+  seenVodIds: string[];
+  lastUpdated: number;
+}
+
+// 应用设置
+export interface AppSettings {
+  sources: VideoSource[];
+  currentSourceId: string;
+  player: PlayerSettings;
+  cache: CacheSettings;
+}
+
+// 收藏类型
+export interface FavoriteItem {
+  vod_id: number;
+  vod_name: string;
+  vod_pic: string;
+  vod_remarks?: string;
+  type_name?: string;
+  timestamp: number;
+  sourceId: string;
+  /** 来源影视源名称（展示标注用） */
+  sourceName?: string;
+  /** 对应源被删除后的待清理标记（时间戳，超 30 分钟物理删除） */
+  pendingDeleteAt?: number;
+}
